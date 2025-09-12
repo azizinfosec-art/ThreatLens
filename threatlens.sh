@@ -13,7 +13,7 @@ OUTDIR_ROOT="./output"
 TARGETS=()
 TARGETS_FILE=""
 TEMPLATES_DIR="./nuclei-templates"
-HTTPX_MATCH_CODES="200,204,301,302,307,401,403"
+HTTPX_MATCH_CODES="200,204,301,302,307,401,403,405,500,502,503,504"
 INCLUDE_SUBS=false
 DRY_RUN=false
 THREADS=50
@@ -324,8 +324,6 @@ run_nuclei() { # tdir
   local dast_flag=()
   if nuclei -h 2>&1 | grep -q -- "-dast"; then
     dast_flag=( -dast )
-  else
-    log INFO "nuclei '-dast' not supported by this version; proceeding without it"
   fi
   run nuclei -l "$input_list" -t "$TEMPLATES_DIR" "${dast_flag[@]}" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
 }
