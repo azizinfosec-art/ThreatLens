@@ -421,22 +421,31 @@ process_target() { # target
     fi
   fi
 
-  # If user requested to stop after dedupe, skip probe/scan and just export the list
-  if [ "$PHASE" = "collect" ]; then
-    echo "Deduped URL list ready: $WORKDIR/urls.deduped.txt"
-    echo "You can now run nuclei manually, e.g.:"
-    echo "  nuclei -l '$WORKDIR/urls.deduped.txt' -t '$TEMPLATES_DIR' -jsonl -o '$WORKDIR/results/nuclei.jsonl'"
+  # --- GET inputs extraction ---
+  extract_inputs_get "$WORKDIR"
+  [ "$FUZZIFY" = true ] && prepare_fuzz_list "$WORKDIR"
+
+  # Stop here if inputs-only or phase=collect requested
+  if [ "$INPUTS_ONLY" = true ] || [ "$PHASE" = "collect" ]; then
+    log INFO "Inputs ready: $WORKDIR/results/inputs_get.txt"
+    end_ts="$(date +%s)"; duration=$(( end_ts - start_ts ))
+    write_summary "$WORKDIR" "$duration"
+    rm -rf "$tmpdir" || true; trap - EXIT; return 0
+  fi
   fi
 
-  # Collect-only mode: stop after dedupe
-  echo "Deduped URL list ready: $WORKDIR/urls.deduped.txt"
-  echo "Next step (manual): run nuclei using the list above."
-  echo "  nuclei -l '$WORKDIR/urls.deduped.txt' -t '$TEMPLATES_DIR' -jsonl -o '$WORKDIR/results/nuclei.jsonl'"
+  # Phase: scan (default to inputs_get.txt if not overridden and not using scan-raw)
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "scan" ]; then
+    local default_inputs="$WORKDIR/results/inputs_get.txt"
+    if [ -z "$NUCLEI_INPUT_FILE" ] && [ "$SCAN_SOURCE" != "raw" ] && [ -s "$default_inputs" ]; then
+      NUCLEI_INPUT_FILE="$default_inputs"
+    fi
+    run_nuclei "$WORKDIR"
   fi
 
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
-  # Minimal summary for collect-only mode
+  # Minimal summary
   if [ "$DRY_RUN" != true ]; then
     local count_dedup=0
     [ -f "$WORKDIR/urls.deduped.txt" ] && count_dedup=$(wc -l < "$WORKDIR/urls.deduped.txt" | tr -d ' ')
@@ -445,7 +454,7 @@ process_target() { # target
     echo "List:         $WORKDIR/urls.deduped.txt"
     echo "Logs:         $WORKDIR/logs"
   fi
-  log INFO "Completed $target (collect-only)"
+  log INFO "Completed $target"
   rm -rf "$tmpdir" || true
   # Clear trap so EXIT doesn’t reference a now-unset local var
   trap - EXIT
