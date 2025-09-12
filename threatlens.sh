@@ -435,6 +435,13 @@ process_target() { # target
     fi
   fi
 
+  # If user requested to stop after dedupe, skip probe/scan and just export the list
+  if [ "$PHASE" = "collect" ]; then
+    echo "Deduped URL list ready: $WORKDIR/urls.deduped.txt"
+    echo "You can now run nuclei manually, e.g.:"
+    echo "  nuclei -l '$WORKDIR/urls.deduped.txt' -t '$TEMPLATES_DIR' -jsonl -o '$WORKDIR/results/nuclei.jsonl'"
+  fi
+
   # Phase: live (skip entirely if scanning raw URLs)
   if [ "$SCAN_SOURCE" != "raw" ]; then
     if [ "$PHASE" = "all" ] || [ "$PHASE" = "live" ]; then
