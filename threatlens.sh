@@ -244,7 +244,10 @@ dedupe_urls() { # tdir
   local tdir="$1"; shift
   local rawdir="$tdir/raw"; mkdir -p "$tdir"
   local tmp="$tdir/.urls.tmp"
-  run bash -c "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tmp'; else : > '$tmp'; fi"
+  # Build tmp URL list robustly; always leave a file for downstream steps
+  run bash -c "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tmp'; else : > '$tmp'; fi" || true
+  # Fallback in case prior step failed unexpectedly
+  [ -f "$tmp" ] || : > "$tmp"
   post_filter_inputs "$tmp" "$tdir/urls.deduped.txt"
   rm -f "$tmp" || true
 }
