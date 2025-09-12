@@ -18,6 +18,15 @@ INCLUDE_SUBS=false
 DRY_RUN=false
 THREADS=50
 NUCLEI_EXTRA_ARGS=()
+# Nuclei input source: "alive" (default via httpx) or "raw" (deduped URLs directly)
+SCAN_SOURCE="alive"
+PHASE="all" # collect|live|scan|all
+RESUME=false
+PARALLEL=1
+FUZZ_MODE=false
+FUZZ_ADD_PARAMS=false
+PARAM_WORDLIST="./wordlists/params.txt"
+SIGNAL_SEVERITY=""
 PHASE="all" # collect|live|scan|all
 RESUME=false
 PARALLEL=1
@@ -96,6 +105,11 @@ Options:
       --phase VALUE          Phase to run: collect|live|scan|all (default: all)
       --resume               Skip phases with existing outputs
       --parallel N           Process up to N targets concurrently (default: 1)
+      --scan-raw             Feed nuclei with deduped URLs directly (skip httpx)
+      --fuzz                 Enable fuzz-style scanning (NucleiFuzzer-like)
+      --fuzz-add-params     Add common params to URLs without query
+      --param-wordlist FILE Wordlist of parameter names (default: ./wordlists/params.txt)
+      --signal LIST          Nuclei severities (e.g., high,critical)
   -h, --help                 Show this help
 
 Dependencies:
@@ -135,6 +149,22 @@ parse_args() {
         NUCLEI_EXTRA_ARGS=($2); shift 2;;
       --dry-run)
         DRY_RUN=true; shift;;
+      --scan-raw|--no-probe)
+        SCAN_SOURCE="raw"; shift;;
+      --phase)
+        PHASE="$2"; shift 2;;
+      --resume)
+        RESUME=true; shift;;
+      --parallel)
+        PARALLEL="$2"; shift 2;;
+      --fuzz)
+        FUZZ_MODE=true; shift;;
+      --fuzz-add-params)
+        FUZZ_ADD_PARAMS=true; shift;;
+      --param-wordlist)
+        PARAM_WORDLIST="$2"; shift 2;;
+      --signal)
+        SIGNAL_SEVERITY="$2"; shift 2;;
       --phase)
         PHASE="$2"; shift 2;;
       --resume)
@@ -236,17 +266,61 @@ check_liveness() { # tdir
   run httpx -l "$tdir/urls.deduped.txt" -silent -follow-redirects -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
 }
 
+fuzz_prepare() { # tdir
+  local tdir="$1"; shift
+  local fdir="$tdir/fuzz"
+  mkdir -p "$fdir"
+  local alive="$tdir/alive/alive.txt"
+  [ -s "$alive" ] || { log WARN "No alive URLs to fuzz"; return; }
+
+  # Replace existing parameter values with FUZZ marker
+  run bash -c "grep -F '?' '$alive' | sed -E 's/=[^&#?]*/=FUZZ/g' | sort -u > '$fdir/fuzz_base.txt'" || true
+
+  # Optionally add common parameters to URLs without query part
+  if [ "$FUZZ_ADD_PARAMS" = true ] && [ -f "$PARAM_WORDLIST" ]; then
+    run bash -c "grep -v '?' '$alive' | while read -r u; do while read -r p; do echo \"$u?$p=FUZZ\"; done < '$PARAM_WORDLIST'; done | sort -u > '$fdir/fuzz_added.txt'" || true
+  else
+    : > "$fdir/fuzz_added.txt"
+  fi
+
+  # Combine
+  run bash -c "cat '$fdir/fuzz_base.txt' '$fdir/fuzz_added.txt' 2>/dev/null | sort -u > '$fdir/fuzz_urls.txt'" || true
+}
+
+run_nuclei_fuzz() { # tdir
+  local tdir="$1"; shift
+  local fdir="$tdir/fuzz"
+  mkdir -p "$fdir"
+  if [ ! -s "$fdir/fuzz_urls.txt" ]; then
+    log WARN "No fuzz URLs prepared for $(basename "$tdir")"
+    return 0
+  fi
+  local sev_args=()
+  if [ -n "$SIGNAL_SEVERITY" ]; then sev_args=( -severity "$SIGNAL_SEVERITY" ); fi
+  # Use tags likely aligned with fuzzing templates
+  run nuclei -l "$fdir/fuzz_urls.txt" -t "$TEMPLATES_DIR" -tags xss,sqli,lfi,ssrf,open-redirect -jsonl -o "$fdir/nuclei_fuzz.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
+}
+
 run_nuclei() { # tdir
   local tdir="$1"; shift
   local resdir="$tdir/results"
   mkdir -p "$resdir"
-  if [ ! -s "$tdir/alive/alive.txt" ]; then
-    log WARN "No alive URLs for $(basename "$tdir"). Skipping nuclei."
+  local input_list
+  if [ "$SCAN_SOURCE" = "raw" ]; then
+    input_list="$tdir/urls.deduped.txt"
+  else
+    input_list="$tdir/alive/alive.txt"
+  fi
+
+  if [ ! -s "$input_list" ]; then
+    log WARN "No input URLs (source=$SCAN_SOURCE) for $(basename "$tdir"). Skipping nuclei."
     : > "$resdir/nuclei.jsonl"
     return 0
   fi
 
-  run nuclei -l "$tdir/alive/alive.txt" -t "$TEMPLATES_DIR" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${NUCLEI_EXTRA_ARGS[@]}"
+  local sev_args=()
+  if [ -n "$SIGNAL_SEVERITY" ]; then sev_args=( -severity "$SIGNAL_SEVERITY" ); fi
+  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
 }
 
 write_summary() { # tdir, duration_sec
@@ -336,13 +410,17 @@ process_target() { # target
     fi
   fi
 
-  # Phase: live
-  if [ "$PHASE" = "all" ] || [ "$PHASE" = "live" ]; then
-    if [ "$RESUME" = true ] && [ -s "$WORKDIR/alive/alive.txt" ]; then
-      log INFO "Resume: alive/alive.txt exists, skipping liveness"
-    else
-      check_liveness "$WORKDIR"
+  # Phase: live (skip entirely if scanning raw URLs)
+  if [ "$SCAN_SOURCE" != "raw" ]; then
+    if [ "$PHASE" = "all" ] || [ "$PHASE" = "live" ]; then
+      if [ "$RESUME" = true ] && [ -s "$WORKDIR/alive/alive.txt" ]; then
+        log INFO "Resume: alive/alive.txt exists, skipping liveness"
+      else
+        check_liveness "$WORKDIR"
+      fi
     fi
+  else
+    log INFO "Skipping httpx probe (scan_source=raw)"
   fi
 
   # Phase: scan
