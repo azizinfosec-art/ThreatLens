@@ -271,7 +271,7 @@ rank_inputs() { # tdir -> results/inputs_ranked.txt (enhanced scoring v2)
   local out="$tdir/results/inputs_ranked.txt"
   [ -s "$in" ] || { : > "$out"; return 0; }
 
-  awk -v IGNORECASE=1 -F'\?' '
+  awk -v IGNORECASE=1 -F'[?]' '
   function b64ish(v){ return (length(v)>=8 && match(v, "^[A-Za-z0-9+/_%-]+={0,2}$")) }
   function urlish(v){ return match(v, "^(https?|ftp)://") }
   function pathish(v){ return (index(v, "/") || match(v, "%2[fF]")) }
@@ -322,7 +322,7 @@ rank_inputs() { # tdir -> results/inputs_ranked.txt (enhanced scoring v2)
     else if(e ~ /^(do)$/) base+=1
     if(d>=3) base+=1
 
-    q=""; if(split($0,parts,"\?")==2) q=parts[2]
+    q=""; if(split($0,parts,/[?]/)==2) q=parts[2]
     n=split(q, kvs, /[&]/)
     maxp=0
     for(i=1;i<=n;i++){
