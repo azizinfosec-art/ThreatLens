@@ -263,7 +263,8 @@ process_target() { # target
   # Temp dir per target
   local tmpdir
   tmpdir="$(mktemp -d -t threatlens.XXXXXX)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  # Cleanup on script exit as a fallback; safe with set -u
+  trap 'if [ -n "${tmpdir-}" ]; then rm -rf -- "$tmpdir"; fi' EXIT
   local start_ts end_ts duration
   start_ts="$(date +%s)"
 
@@ -277,6 +278,8 @@ process_target() { # target
   write_summary "$WORKDIR" "$duration"
   log INFO "Completed $target"
   rm -rf "$tmpdir" || true
+  # Clear trap so EXIT doesn’t reference a now-unset local var
+  trap - EXIT
 }
 
 main() {
