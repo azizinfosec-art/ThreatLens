@@ -4,6 +4,7 @@
 # Core: URL collection -> dedupe -> liveness -> nuclei
 
 set -Eeuo pipefail
+IFS=$'\n\t'
 
 TOOL_NAME="ThreatLens"
 VERSION="0.1.0"
@@ -27,9 +28,6 @@ FUZZ_MODE=false
 FUZZ_ADD_PARAMS=false
 PARAM_WORDLIST="./wordlists/params.txt"
 SIGNAL_SEVERITY=""
-PHASE="all" # collect|live|scan|all
-RESUME=false
-PARALLEL=1
 
 # Runtime globals
 WORKDIR=""
@@ -263,7 +261,7 @@ check_liveness() { # tdir
   local tdir="$1"; shift
   local alivedir="$tdir/alive"
   mkdir -p "$alivedir"
-  run httpx -l "$tdir/urls.deduped.txt" -silent -follow-redirects -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
+  run httpx -l "$tdir/urls.deduped.txt" -silent -follow-redirects -timeout 10 -retries 1 -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
 }
 
 fuzz_prepare() { # tdir
@@ -325,7 +323,7 @@ run_nuclei() { # tdir
   if nuclei -h 2>&1 | grep -q -- "-dast"; then
     dast_flag=( -dast )
   fi
-  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" "${dast_flag[@]}" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
+  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" "${dast_flag[@]}" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -c "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
 }
 
 write_summary() { # tdir, duration_sec
@@ -380,6 +378,12 @@ write_summary() { # tdir, duration_sec
 
 process_target() { # target
   local target="$1"
+  # Ensure scheme for tools that expect URLs (default to https://)
+  local target_url="$target"
+  case "$target_url" in
+    http://*|https://*) ;; 
+    *) target_url="https://$target_url" ;;
+  esac
   local safe
   safe="$(sanitize_name "$target")"
 
@@ -402,7 +406,7 @@ process_target() { # target
     if [ "$RESUME" = true ] && compgen -G "$WORKDIR/raw/*.txt" > /dev/null; then
       log INFO "Resume: raw/*.txt exists, skipping collect"
     else
-      collect_urls "$target" "$WORKDIR" || true
+      collect_urls "$target_url" "$WORKDIR" || true
     fi
   fi
 
