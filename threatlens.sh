@@ -157,15 +157,15 @@ collect_urls() { # target, target_dir
   run katana -rl "$THREADS" -u "$target" -silent -o "$rawdir/katana.txt" || true
 
   # waybackurls (domain)
-  run bash -lc "echo '$target' | sed -E 's#^https?://##' | waybackurls > '$rawdir/waybackurls.txt'" || true
+  run bash -c "echo '$target' | sed -E 's#^https?://##' | waybackurls > '$rawdir/waybackurls.txt'" || true
 
   # gauplus (domain)
   local subsFlag=""
   [ "$INCLUDE_SUBS" = true ] && subsFlag="-subs"
-  run bash -lc "echo '$target' | sed -E 's#^https?://##' | gauplus $subsFlag -t $THREADS -random-agent > '$rawdir/gauplus.txt'" || true
+  run bash -c "echo '$target' | sed -E 's#^https?://##' | gauplus $subsFlag -t $THREADS -random-agent > '$rawdir/gauplus.txt'" || true
 
   # hakrawler (seed URL)
-  run bash -lc "echo '$target' | hakrawler -plain -depth 2 -t $THREADS > '$rawdir/hakrawler.txt'" || true
+  run bash -c "echo '$target' | hakrawler -plain -depth 2 -t $THREADS > '$rawdir/hakrawler.txt'" || true
 
   # ParamSpider (domain)
   local domain
