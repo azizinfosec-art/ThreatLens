@@ -13,3 +13,9 @@ All notable changes to this project will be documented in this file.
 - Document installation, usage, troubleshooting, and best practices.
 - Provide examples and Makefile with common targets.
 
+## [0.2.0] - 2025-09-12
+- Add GET-focused inputs phase:
+  - `--inputs-only` produces `results/inputs_get.txt` and exits with summary.
+  - `--fuzzify` also produces `results/fuzz_get.txt` by replacing values with `FUZZ`.
+- Default scan input now prefers `results/inputs_get.txt` (unless `--scan-raw` or `--nuclei-input` is provided).
+- Keep nuclei options user-supplied via `--nuclei-args`.

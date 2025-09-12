@@ -20,6 +20,18 @@ Outputs
 - `output/<target>/{raw,alive,results,logs}`
 - `results/nuclei.jsonl`, `results/summary.{txt,json}`
 
+GET Inputs Mode
+- Produce GET-parameterized inputs only (stop after extraction):
+  - `./threatlens.sh -t example.com --inputs-only`
+- Also produce a FUZZ list for fuzz-oriented templates/tools:
+  - `./threatlens.sh -t example.com --inputs-only --fuzzify`
+- Full pipeline (recommendation for nuclei args):
+  - `./threatlens.sh -t example.com --phase all --threads 80 \
+     --nuclei-args "-dast -tags xss,sqli,lfi,redirect,ssrf -severity low,medium,high,critical -rl 50 -c 50"`
+- Use a custom list for nuclei and skip extraction:
+  - `./threatlens.sh -t example.com --phase scan \
+     --nuclei-input urls_with_params.txt --nuclei-args "-dast -tags sqli,xss"`
+
 Notes
 - Use `--dry-run` to preview commands.
 - Keep scans within authorized scope.

@@ -464,27 +464,22 @@ main() {
   parse_args "$@"
 
   # Verify dependencies early based on the requested mode
-  if [ -n "$NUCLEI_INPUT_FILE" ]; then
-    # nuclei-only mode
-    for bin in nuclei jq; do require_tool "$bin"; done
-  else
-    # recon and/or probe pipeline
-    require_tool katana
-    require_tool uro
-    # optional recon sources: warn-only if missing by gating calls
-    for opt in waybackurls gauplus hakrawler paramspider; do
-      if ! command -v "$opt" >/dev/null 2>&1; then
-        log WARN "Optional tool missing: $opt (continuing without it)"
-      fi
-    done
-    # probe/scan deps
-    require_tool httpx
+  # Core collectors
+  require_tool katana
+  require_tool uro
+  # optional recon sources: warn-only if missing by gating calls
+  for opt in waybackurls gauplus hakrawler paramspider; do
+    if ! command -v "$opt" >/dev/null 2>&1; then
+      log WARN "Optional tool missing: $opt (continuing without it)"
+    fi
+  done
+  # If we are going to scan, ensure nuclei exists
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "scan" ] || [ -n "$NUCLEI_INPUT_FILE" ]; then
     require_tool nuclei
-    command -v jq >/dev/null 2>&1 || log WARN "jq missing: severity breakdown and HTML report may be limited"
   fi
+  command -v jq >/dev/null 2>&1 || log WARN "jq missing: some summaries may be limited"
 
   mkdir -p "$OUTDIR_ROOT"
-  prepare_templates
 
   if [ "$PARALLEL" -le 1 ] || [ "$DRY_RUN" = true ]; then
     for t in "${TARGETS[@]}"; do
