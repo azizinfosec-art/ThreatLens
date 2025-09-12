@@ -143,7 +143,10 @@ parse_args() {
 
 prepare_templates() {
   mkdir -p "$TEMPLATES_DIR"
-  run nuclei -ut -ud "$TEMPLATES_DIR"
+  # Try modern nuclei flags first, then legacy as fallback
+  if ! run nuclei -update -update-directory "$TEMPLATES_DIR"; then
+    run nuclei -ut -ud "$TEMPLATES_DIR" || true
+  fi
 }
 
 collect_urls() { # target, target_dir
@@ -178,7 +181,7 @@ dedupe_urls() { # tdir
   local rawdir="$tdir/raw"
   mkdir -p "$tdir"
   # uro collapses and dedupes
-  run bash -lc "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tdir/urls.deduped.txt'; else : > '$tdir/urls.deduped.txt'; fi"
+  run bash -c "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tdir/urls.deduped.txt'; else : > '$tdir/urls.deduped.txt'; fi"
 }
 
 check_liveness() { # tdir
@@ -198,7 +201,7 @@ run_nuclei() { # tdir
     return 0
   fi
 
-  run nuclei -l "$tdir/alive/alive.txt" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${NUCLEI_EXTRA_ARGS[@]}"
+  run nuclei -l "$tdir/alive/alive.txt" -t "$TEMPLATES_DIR" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${NUCLEI_EXTRA_ARGS[@]}"
 }
 
 write_summary() { # tdir, duration_sec
