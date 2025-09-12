@@ -142,8 +142,14 @@ parse_args() {
       --threads)
         THREADS="$2"; shift 2;;
       --nuclei-args)
-        # shellcheck disable=SC2206
-        NUCLEI_EXTRA_ARGS=($2); shift 2;;
+        # Split the provided nuclei args on spaces regardless of global IFS
+        {
+          __old_ifs="$IFS"; IFS=' ';
+          # shellcheck disable=SC2206
+          NUCLEI_EXTRA_ARGS=($2);
+          IFS="$__old_ifs";
+        };
+        shift 2;;
       --nuclei-input)
         NUCLEI_INPUT_FILE="$2"; shift 2;;
       --inputs-only)

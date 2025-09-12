@@ -2,7 +2,7 @@ ThreatLens
 ===========
 
 Brief
-- Lightweight web recon orchestrator. Collects URLs (Katana, Waybackurls, Gauplus, Hakrawler, ParamSpider), deduplicates (uro), checks liveness (httpx), and scans with Nuclei. Outputs per target with JSONL findings and a short summary.
+- Lightweight web recon orchestrator. Collects URLs (Katana, Waybackurls, Gauplus, Hakrawler, ParamSpider), deduplicates (uro), and extracts GET-parameterized inputs for DAST. You can run nuclei directly from this tool (via `--nuclei-args`) or outside it. Outputs per target with a concise summary.
 
 Install (user creates .venv)
 - Prereqs (Kali/Debian): `sudo apt update && sudo apt install -y golang-go python3-venv python3-pip jq git`
@@ -12,13 +12,19 @@ Install (user creates .venv)
   - `source .venv/bin/activate`
 - Install requirements into .venv:
   - `./tl deps`
-- Run scans:
-  - `./tl scan -t example.com`
-  - `./tl scan -l targets.txt --parallel 4 --resume`
+- Run (common patterns):
+  - Inputs only (GET URLs): `./threatlens.sh -t example.com --inputs-only`
+  - Inputs + FUZZ list: `./threatlens.sh -t example.com --inputs-only --fuzzify`
+  - Full pipeline with nuclei (recommended args):
+    - `./threatlens.sh -t example.com --phase all --threads 80 \
+       --nuclei-args "-dast -tags xss,sqli,lfi,redirect,ssrf -severity low,medium,high,critical -rl 50 -c 50"`
+  - Custom nuclei list: `./threatlens.sh -t example.com --phase scan \
+       --nuclei-input urls_with_params.txt --nuclei-args "-dast -tags sqli,xss"`
 
 Outputs
 - `output/<target>/{raw,alive,results,logs}`
-- `results/nuclei.jsonl`, `results/summary.{txt,json}`
+- `results/inputs_get.txt` (GET URLs) and optionally `results/fuzz_get.txt`
+- If nuclei is used: `results/nuclei.jsonl`, `results/summary.{txt,json}`
 
 GET Inputs Mode
 - Produce GET-parameterized inputs only (stop after extraction):
