@@ -19,6 +19,8 @@ INCLUDE_SUBS=false
 DRY_RUN=false
 THREADS=50
 NUCLEI_EXTRA_ARGS=()
+# Provide a custom input list to nuclei (one URL per line)
+NUCLEI_INPUT_FILE=""
 # Nuclei input source: "alive" (default via httpx) or "raw" (deduped URLs directly)
 SCAN_SOURCE="alive"
 PHASE="all" # collect|live|scan|all
@@ -145,6 +147,8 @@ parse_args() {
       --nuclei-args)
         # shellcheck disable=SC2206
         NUCLEI_EXTRA_ARGS=($2); shift 2;;
+      --nuclei-input)
+        NUCLEI_INPUT_FILE="$2"; shift 2;;
       --dry-run)
         DRY_RUN=true; shift;;
       --scan-raw|--no-probe)
@@ -184,7 +188,9 @@ parse_args() {
     done < "$TARGETS_FILE"
   fi
 
-  [ ${#TARGETS[@]} -gt 0 ] || die "No targets specified"
+  if [ ${#TARGETS[@]} -eq 0 ] && [ -z "${NUCLEI_INPUT_FILE}" ]; then
+    die "No targets specified (or provide --nuclei-input <file>)"
+  fi
 }
 
 templates_present() {
@@ -304,7 +310,9 @@ run_nuclei() { # tdir
   local resdir="$tdir/results"
   mkdir -p "$resdir"
   local input_list
-  if [ "$SCAN_SOURCE" = "raw" ]; then
+  if [ -n "$NUCLEI_INPUT_FILE" ]; then
+    input_list="$NUCLEI_INPUT_FILE"
+  elif [ "$SCAN_SOURCE" = "raw" ]; then
     input_list="$tdir/urls.deduped.txt"
   else
     input_list="$tdir/alive/alive.txt"
@@ -401,6 +409,14 @@ process_target() { # target
 
   log INFO "Starting processing for $target -> $WORKDIR (phase=$PHASE resume=$RESUME)"
 
+  # If a custom nuclei input file is provided, skip recon/probe and go straight to nuclei
+  if [ -n "$NUCLEI_INPUT_FILE" ]; then
+    # Make summary counts meaningful by mirroring input into urls.deduped.txt
+    if [ ! -s "$WORKDIR/urls.deduped.txt" ]; then
+      mkdir -p "$WORKDIR"
+      cp -f "$NUCLEI_INPUT_FILE" "$WORKDIR/urls.deduped.txt" 2>/dev/null || true
+    fi
+  else
   # Phase: collect (also needed before live/scan)
   if [ "$PHASE" = "all" ] || [ "$PHASE" = "collect" ] || [ "$PHASE" = "live" ]; then
     if [ "$RESUME" = true ] && compgen -G "$WORKDIR/raw/*.txt" > /dev/null; then
@@ -430,6 +446,7 @@ process_target() { # target
     fi
   else
     log INFO "Skipping httpx probe (scan_source=raw)"
+  fi
   fi
 
   # Phase: scan
