@@ -247,7 +247,8 @@ extract_inputs_get() { # tdir -> creates results/inputs_get.txt
     log WARN "No deduped URLs at $in"
     : > "$out"; return 0
   fi
-  grep -Ei '\?[A-Za-z0-9_.%-]+=' "$in" | sort -u > "$out" || true
+  # Use awk with string regexes via match() to avoid fragile \/ escaping
+  awk 'match($0, "^(https?|ftp)://") && match($0, "[?][A-Za-z0-9_.%-]+=")' "$in" | sort -u > "$out" || true
   log INFO "inputs_get.txt: $(wc -l < "$out" | tr -d ' ') URLs with parameters"
 }
 
