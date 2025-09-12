@@ -15,13 +15,28 @@ mkdir -p "$BIN_DIR"
 
 echo "[+] Preparing Python virtual environment at $PY_DIR"
 python3 -m venv "$PY_DIR"
-"$PY_DIR/bin/pip" install --upgrade pip >/dev/null
-"$PY_DIR/bin/pip" install uro paramspider >/dev/null
+"$PY_DIR/bin/pip" install --upgrade pip wheel setuptools >/dev/null
+
+echo "[+] Installing Python tools (uro, ParamSpider)"
+if ! "$PY_DIR/bin/pip" install uro >/dev/null 2>&1; then
+  echo "[!] PyPI 'uro' install failed, trying from git..."
+  "$PY_DIR/bin/pip" install "git+https://github.com/s0md3v/uro.git" >/dev/null
+fi
+# ParamSpider is not published on PyPI; install from GitHub
+if ! "$PY_DIR/bin/pip" install "git+https://github.com/devanshbatham/ParamSpider.git" >/dev/null 2>&1; then
+  echo "[-] Failed to install ParamSpider from GitHub. Please ensure 'git' and internet access are available." >&2
+  exit 1
+fi
 
 echo "[+] Preparing Go local toolchain under $VENV_DIR"
 export GOPATH="$VENV_DIR/go"
 export GOBIN="$BIN_DIR"
 export PATH="$BIN_DIR:$PY_DIR/bin:$PATH"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "[-] Git is not installed. On Kali: sudo apt-get install git" >&2
+  exit 1
+fi
 
 if ! command -v go >/dev/null 2>&1; then
   echo "[-] Go is not installed. On Kali: sudo apt-get install golang-go" >&2
@@ -65,4 +80,3 @@ echo "  $ $BIN_DIR/threatlens -t example.com"
 echo "\nOption B: activate and run"
 echo "  $ source $VENV_DIR/activate"
 echo "  (.venv) $ threatlens -t example.com"
-
