@@ -369,7 +369,13 @@ cap_top_per_host() { # in -> out, cap per host
   local in="$1"; local out="$2"; local cap="$3"
   [ "$cap" -gt 0 ] || { cp "$in" "$out" 2>/dev/null || :; return 0; }
   awk -v CAP="$cap" -F/ '
-  function host(u,  h){ h=u; sub(/^https?:\/\/(www\.)?/,"",h); sub(/\/.*$/,"",h); return h }
+  function host(u,  h){
+    h=u
+    if (match(h, "^[Hh][Tt][Tt][Pp][Ss]?://")) h = substr(h, RSTART+RLENGTH)
+    if (match(h, "^[Ww][Ww][Ww][.]")) h = substr(h, 5)
+    if (match(h, "/")) h = substr(h, 1, RSTART-1)
+    return h
+  }
   { h=host($0); c[h]++; if(c[h]<=CAP) print }' "$in" > "$out"
 }
 
@@ -647,4 +653,3 @@ main() {
 }
 
 main "$@"
-
