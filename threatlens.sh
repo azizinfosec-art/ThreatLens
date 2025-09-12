@@ -435,6 +435,11 @@ process_target() { # target
     else
       run_nuclei "$WORKDIR"
     fi
+    # Optional FUZZ mode: generate FUZZ URLs from alive list and run fuzz-focused templates
+    if [ "$FUZZ_MODE" = true ]; then
+      fuzz_prepare "$WORKDIR"
+      run_nuclei_fuzz "$WORKDIR"
+    fi
   fi
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
