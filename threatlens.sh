@@ -90,7 +90,8 @@ $TOOL_NAME v$VERSION
 
 Usage: ./threatlens.sh [options] (-t <target> | -l targets.txt)
 
-Targets can be domains or URLs. Each target gets structured outputs:
+Targets can be domains or URLs. This tool only collects URLs from multiple sources and writes a deduplicated list; no probing or scanning is performed.
+Each target gets structured outputs:
   ./output/<target>/{raw,alive,results,logs}
 
 Options:
@@ -101,18 +102,9 @@ Options:
       --include-subs         Include subdomains for collectors that support it
       --httpx-codes LIST     Comma list of HTTP status codes considered alive
       --threads N            Concurrency for tools that support it (default: 50)
-      --nuclei-args "..."    Extra args passed to nuclei (quote the string)
-      --nuclei-input FILE    Provide custom URL list for nuclei (skip recon/probe)
       --dry-run              Print commands instead of running
-      --phase VALUE          Phase to run: collect|live|scan|all (default: all)
-      --resume               Skip phases with existing outputs
-      --parallel N           Process up to N targets concurrently (default: 1)
-      --scan-raw             Feed nuclei with deduped URLs directly (skip httpx)
-      --fuzz                 Enable fuzz-style scanning (NucleiFuzzer-like)
-      --fuzz-add-params     Add common params to URLs without query
-      --param-wordlist FILE Wordlist of parameter names (default: ./wordlists/params.txt)
-      --signal LIST          Nuclei severities (e.g., high,critical)
-      --html-report          Also render results to results/nuclei.html (requires jq)
+      --threads N            Concurrency for collectors (default: 50)
+      --include-subs         Include subdomains where supported
   -h, --help                 Show this help
 
 Dependencies:
@@ -187,40 +179,12 @@ parse_args() {
     done < "$TARGETS_FILE"
   fi
 
-  if [ ${#TARGETS[@]} -eq 0 ] && [ -z "${NUCLEI_INPUT_FILE}" ]; then
-    die "No targets specified (or provide --nuclei-input <file>)"
+  if [ ${#TARGETS[@]} -eq 0 ]; then
+    die "No targets specified"
   fi
 }
 
-templates_present() {
-  find "$TEMPLATES_DIR" -type f \( -name "*.yaml" -o -name "*.yml" \) -print -quit | grep -q .
-}
-
-prepare_templates() {
-  mkdir -p "$TEMPLATES_DIR"
-  # In dry-run, only print intended actions and skip presence checks
-  if [ "$DRY_RUN" = true ]; then
-    log INFO "dry-run: skipping templates update/clone and presence checks"
-    run nuclei -update -update-directory "$TEMPLATES_DIR" || true
-    run nuclei -ut -ud "$TEMPLATES_DIR" || true
-    return 0
-  fi
-  # Try modern nuclei flags first, then legacy as fallback
-  if ! run nuclei -update -update-directory "$TEMPLATES_DIR"; then
-    run nuclei -ut -ud "$TEMPLATES_DIR" || true
-  fi
-  # If still empty, fallback to cloning the official templates repo
-  if ! templates_present; then
-    if command -v git >/dev/null 2>&1; then
-      log WARN "Templates directory appears empty. Cloning official nuclei-templates..."
-      run git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$TEMPLATES_DIR" || true
-    fi
-  fi
-  # Final check
-  if ! templates_present; then
-    die "No nuclei templates found in '$TEMPLATES_DIR'. Ensure network access and rerun, or manually populate templates (git clone https://github.com/projectdiscovery/nuclei-templates.git)."
-  fi
-}
+# No templates management needed in collect-only mode
 
 collect_urls() { # target, target_dir
   local target="$1"; shift
@@ -262,12 +226,7 @@ dedupe_urls() { # tdir
   run bash -c "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tdir/urls.deduped.txt'; else : > '$tdir/urls.deduped.txt'; fi"
 }
 
-check_liveness() { # tdir
-  local tdir="$1"; shift
-  local alivedir="$tdir/alive"
-  mkdir -p "$alivedir"
-  run httpx -l "$tdir/urls.deduped.txt" -silent -follow-redirects -timeout 10 -retries 1 -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
-}
+check_liveness() { :; }
 
 fuzz_prepare() { # tdir
   local tdir="$1"; shift
@@ -290,48 +249,9 @@ fuzz_prepare() { # tdir
   run bash -c "cat '$fdir/fuzz_base.txt' '$fdir/fuzz_added.txt' 2>/dev/null | sort -u > '$fdir/fuzz_urls.txt'" || true
 }
 
-run_nuclei_fuzz() { # tdir
-  local tdir="$1"; shift
-  local fdir="$tdir/fuzz"
-  mkdir -p "$fdir"
-  if [ ! -s "$fdir/fuzz_urls.txt" ]; then
-    log WARN "No fuzz URLs prepared for $(basename "$tdir")"
-    return 0
-  fi
-  local sev_args=()
-  if [ -n "$SIGNAL_SEVERITY" ]; then sev_args=( -severity "$SIGNAL_SEVERITY" ); fi
-  # Use tags likely aligned with fuzzing templates
-  run nuclei -l "$fdir/fuzz_urls.txt" -t "$TEMPLATES_DIR" -tags xss,sqli,lfi,ssrf,open-redirect -jsonl -o "$fdir/nuclei_fuzz.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
-}
+run_nuclei_fuzz() { :; }
 
-run_nuclei() { # tdir
-  local tdir="$1"; shift
-  local resdir="$tdir/results"
-  mkdir -p "$resdir"
-  local input_list
-  if [ -n "$NUCLEI_INPUT_FILE" ]; then
-    input_list="$NUCLEI_INPUT_FILE"
-  elif [ "$SCAN_SOURCE" = "raw" ]; then
-    input_list="$tdir/urls.deduped.txt"
-  else
-    input_list="$tdir/alive/alive.txt"
-  fi
-
-  if [ ! -s "$input_list" ]; then
-    log WARN "No input URLs (source=$SCAN_SOURCE) for $(basename "$tdir"). Skipping nuclei."
-    : > "$resdir/nuclei.jsonl"
-    return 0
-  fi
-
-  local sev_args=()
-  if [ -n "$SIGNAL_SEVERITY" ]; then sev_args=( -severity "$SIGNAL_SEVERITY" ); fi
-  # Prefer DAST mode if supported by installed nuclei
-  local dast_flag=()
-  if nuclei -h 2>&1 | grep -q -- "-dast"; then
-    dast_flag=( -dast )
-  fi
-  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" "${dast_flag[@]}" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -c "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
-}
+run_nuclei() { :; }
 
 write_summary() { # tdir, duration_sec
   local tdir="$1"; shift
@@ -455,56 +375,24 @@ process_target() { # target
     echo "  nuclei -l '$WORKDIR/urls.deduped.txt' -t '$TEMPLATES_DIR' -jsonl -o '$WORKDIR/results/nuclei.jsonl'"
   fi
 
-  # Phase: live (skip entirely if scanning raw URLs)
-  if [ "$SCAN_SOURCE" != "raw" ]; then
-    if [ "$PHASE" = "all" ] || [ "$PHASE" = "live" ]; then
-      if [ "$RESUME" = true ] && [ -s "$WORKDIR/alive/alive.txt" ]; then
-        log INFO "Resume: alive/alive.txt exists, skipping liveness"
-      else
-        check_liveness "$WORKDIR"
-      fi
-    fi
-  else
-    log INFO "Skipping httpx probe (scan_source=raw)"
-  fi
+  # Collect-only mode: stop after dedupe
+  echo "Deduped URL list ready: $WORKDIR/urls.deduped.txt"
+  echo "Next step (manual): run nuclei using the list above."
+  echo "  nuclei -l '$WORKDIR/urls.deduped.txt' -t '$TEMPLATES_DIR' -jsonl -o '$WORKDIR/results/nuclei.jsonl'"
   fi
 
-  # Phase: scan
-  if [ "$PHASE" = "all" ] || [ "$PHASE" = "scan" ]; then
-    if [ "$RESUME" = true ] && [ -s "$WORKDIR/results/nuclei.jsonl" ]; then
-      log INFO "Resume: results/nuclei.jsonl exists, skipping nuclei"
-    else
-      run_nuclei "$WORKDIR"
-    fi
-    # Optional FUZZ mode: generate FUZZ URLs from alive list and run fuzz-focused templates
-    if [ "$FUZZ_MODE" = true ]; then
-      fuzz_prepare "$WORKDIR"
-      run_nuclei_fuzz "$WORKDIR"
-    fi
-  fi
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
-  write_summary "$WORKDIR" "$duration"
-  # Show a concise findings preview on stdout (top 20)
-  if [ -s "$WORKDIR/results/nuclei.jsonl" ] && [ "$DRY_RUN" != true ]; then
-    echo "--- Findings (top 20) for: $target ---"
-    if command -v jq >/dev/null 2>&1; then
-      jq -r 'select(.!=null) | [(.info.severity // .severity // ""), (.info.name // ""), (.matchedAt // ."matched-at" // .host // .url // "")] | @tsv' "$WORKDIR/results/nuclei.jsonl" 2>/dev/null | head -n 20 || true
-    else
-      sed -n '1,20p' "$WORKDIR/results/nuclei.jsonl" || true
-    fi
-  fi
-
-  # Print a concise final summary to stdout so results are obvious
+  # Minimal summary for collect-only mode
   if [ "$DRY_RUN" != true ]; then
-    echo "--- Scan Summary for: $target ---"
-    cat "$WORKDIR/results/summary.txt" 2>/dev/null || true
-    echo "Results JSONL: $WORKDIR/results/nuclei.jsonl"
-    echo "Logs:          $WORKDIR/logs"
-  else
-    echo "[dry-run] Would show summary and results paths here"
+    local count_dedup=0
+    [ -f "$WORKDIR/urls.deduped.txt" ] && count_dedup=$(wc -l < "$WORKDIR/urls.deduped.txt" | tr -d ' ')
+    echo "--- Collect Summary for: $target ---"
+    echo "Deduped URLs: $count_dedup"
+    echo "List:         $WORKDIR/urls.deduped.txt"
+    echo "Logs:         $WORKDIR/logs"
   fi
-  log INFO "Completed $target (nuclei is the final stage)"
+  log INFO "Completed $target (collect-only)"
   rm -rf "$tmpdir" || true
   # Clear trap so EXIT doesn’t reference a now-unset local var
   trap - EXIT
