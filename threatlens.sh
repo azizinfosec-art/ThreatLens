@@ -30,6 +30,7 @@ FUZZ_MODE=false
 FUZZ_ADD_PARAMS=false
 PARAM_WORDLIST="./wordlists/params.txt"
 SIGNAL_SEVERITY=""
+HTML_REPORT=false
 
 # Runtime globals
 WORKDIR=""
@@ -101,6 +102,7 @@ Options:
       --httpx-codes LIST     Comma list of HTTP status codes considered alive
       --threads N            Concurrency for tools that support it (default: 50)
       --nuclei-args "..."    Extra args passed to nuclei (quote the string)
+      --nuclei-input FILE    Provide custom URL list for nuclei (skip recon/probe)
       --dry-run              Print commands instead of running
       --phase VALUE          Phase to run: collect|live|scan|all (default: all)
       --resume               Skip phases with existing outputs
@@ -110,6 +112,7 @@ Options:
       --fuzz-add-params     Add common params to URLs without query
       --param-wordlist FILE Wordlist of parameter names (default: ./wordlists/params.txt)
       --signal LIST          Nuclei severities (e.g., high,critical)
+      --html-report          Also render results to results/nuclei.html (requires jq)
   -h, --help                 Show this help
 
 Dependencies:
@@ -167,12 +170,8 @@ parse_args() {
         PARAM_WORDLIST="$2"; shift 2;;
       --signal)
         SIGNAL_SEVERITY="$2"; shift 2;;
-      --phase)
-        PHASE="$2"; shift 2;;
-      --resume)
-        RESUME=true; shift;;
-      --parallel)
-        PARALLEL="$2"; shift 2;;
+      --html-report)
+        HTML_REPORT=true; shift;;
       -h|--help)
         usage; exit 0;;
       *)
@@ -382,6 +381,20 @@ write_summary() { # tdir, duration_sec
     echo -n '"severity_counts":'$sev_json
     echo '}'
   } > "$summary_json"
+
+  # Optional HTML rendering of JSONL findings (simple table)
+  if [ "$HTML_REPORT" = true ] && command -v jq >/dev/null 2>&1 && [ -s "$jsonl" ]; then
+    local html="$resdir/nuclei.html"
+    {
+      printf '<!doctype html><meta charset="utf-8"><title>Nuclei Report - %s</title>' "$(basename "$tdir")"
+      printf '<style>body{font-family:sans-serif}table{border-collapse:collapse;width:100%%}th,td{border:1px solid #ddd;padding:6px}th{background:#f3f3f3;text-align:left}tr:nth-child(even){background:#fafafa}.critical{color:#d32f2f}.high{color:#e65100}.medium{color:#f9a825}.low{color:#1976d2}</style>'
+      printf '<h1>Nuclei Report - %s</h1>' "$(basename "$tdir")"
+      printf '<p>Deduped: %s • Alive: %s • Findings: %s • Duration: %ss</p>' "$total_urls" "$alive_urls" "$total_findings" "$duration"
+      printf '<table><thead><tr><th>Severity</th><th>Name</th><th>Template</th><th>Matched</th></tr></thead><tbody>'
+      jq -r 'def esc(s): (s // "") | gsub("&";"&amp;") | gsub("<";"&lt;") | gsub(">";"&gt;"); . as $r | "<tr class=\"" + ((($r.info.severity // $r.severity // "")|ascii_downcase)) + "\"><td>" + esc($r.info.severity // $r.severity) + "</td><td>" + esc($r.info.name) + "</td><td>" + esc($r.templateID) + "</td><td>" + esc($r."matched-at" // $r.matchedAt // $r.url // $r.host) + "</td></tr>"' "$jsonl"
+      printf '</tbody></table>'
+    } > "$html" || true
+  fi
 }
 
 process_target() { # target
@@ -500,10 +513,25 @@ process_target() { # target
 main() {
   parse_args "$@"
 
-  # Verify dependencies early
-  for bin in katana waybackurls gauplus hakrawler paramspider uro httpx nuclei jq; do
-    require_tool "$bin"
-  done
+  # Verify dependencies early based on the requested mode
+  if [ -n "$NUCLEI_INPUT_FILE" ]; then
+    # nuclei-only mode
+    for bin in nuclei jq; do require_tool "$bin"; done
+  else
+    # recon and/or probe pipeline
+    require_tool katana
+    require_tool uro
+    # optional recon sources: warn-only if missing by gating calls
+    for opt in waybackurls gauplus hakrawler paramspider; do
+      if ! command -v "$opt" >/dev/null 2>&1; then
+        log WARN "Optional tool missing: $opt (continuing without it)"
+      fi
+    done
+    # probe/scan deps
+    require_tool httpx
+    require_tool nuclei
+    command -v jq >/dev/null 2>&1 || log WARN "jq missing: severity breakdown and HTML report may be limited"
+  fi
 
   mkdir -p "$OUTDIR_ROOT"
   prepare_templates
