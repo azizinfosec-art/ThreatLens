@@ -11,9 +11,10 @@ Install (user creates .venv)
   - `python3 -m venv .venv`
   - `source .venv/bin/activate`
 - Install requirements into .venv:
-  - `bash scripts/bootstrap_env.sh`
-- Run:
-  - `threatlens -t example.com` (from activated venv)
+  - `./tl deps`
+- Run scans:
+  - `./tl scan -t example.com`
+  - `./tl scan -l targets.txt --parallel 4 --resume`
 
 Outputs
 - `output/<target>/{raw,alive,results,logs}`

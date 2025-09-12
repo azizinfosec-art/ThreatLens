@@ -18,6 +18,9 @@ INCLUDE_SUBS=false
 DRY_RUN=false
 THREADS=50
 NUCLEI_EXTRA_ARGS=()
+PHASE="all" # collect|live|scan|all
+RESUME=false
+PARALLEL=1
 
 # Runtime globals
 WORKDIR=""
@@ -90,6 +93,9 @@ Options:
       --threads N            Concurrency for tools that support it (default: 50)
       --nuclei-args "..."    Extra args passed to nuclei (quote the string)
       --dry-run              Print commands instead of running
+      --phase VALUE          Phase to run: collect|live|scan|all (default: all)
+      --resume               Skip phases with existing outputs
+      --parallel N           Process up to N targets concurrently (default: 1)
   -h, --help                 Show this help
 
 Dependencies:
@@ -129,6 +135,12 @@ parse_args() {
         NUCLEI_EXTRA_ARGS=($2); shift 2;;
       --dry-run)
         DRY_RUN=true; shift;;
+      --phase)
+        PHASE="$2"; shift 2;;
+      --resume)
+        RESUME=true; shift;;
+      --parallel)
+        PARALLEL="$2"; shift 2;;
       -h|--help)
         usage; exit 0;;
       *)
@@ -299,11 +311,43 @@ process_target() { # target
   local start_ts end_ts duration
   start_ts="$(date +%s)"
 
-  log INFO "Starting processing for $target -> $WORKDIR"
-  collect_urls "$target" "$WORKDIR" || true
-  dedupe_urls "$WORKDIR"
-  check_liveness "$WORKDIR"
-  run_nuclei "$WORKDIR"
+  log INFO "Starting processing for $target -> $WORKDIR (phase=$PHASE resume=$RESUME)"
+
+  # Phase: collect (also needed before live/scan)
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "collect" ] || [ "$PHASE" = "live" ]; then
+    if [ "$RESUME" = true ] && compgen -G "$WORKDIR/raw/*.txt" > /dev/null; then
+      log INFO "Resume: raw/*.txt exists, skipping collect"
+    else
+      collect_urls "$target" "$WORKDIR" || true
+    fi
+  fi
+
+  # Phase: dedupe (required before live/scan)
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "collect" ] || [ "$PHASE" = "live" ]; then
+    if [ "$RESUME" = true ] && [ -s "$WORKDIR/urls.deduped.txt" ]; then
+      log INFO "Resume: urls.deduped.txt exists, skipping dedupe"
+    else
+      dedupe_urls "$WORKDIR"
+    fi
+  fi
+
+  # Phase: live
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "live" ]; then
+    if [ "$RESUME" = true ] && [ -s "$WORKDIR/alive/alive.txt" ]; then
+      log INFO "Resume: alive/alive.txt exists, skipping liveness"
+    else
+      check_liveness "$WORKDIR"
+    fi
+  fi
+
+  # Phase: scan
+  if [ "$PHASE" = "all" ] || [ "$PHASE" = "scan" ]; then
+    if [ "$RESUME" = true ] && [ -s "$WORKDIR/results/nuclei.jsonl" ]; then
+      log INFO "Resume: results/nuclei.jsonl exists, skipping nuclei"
+    else
+      run_nuclei "$WORKDIR"
+    fi
+  fi
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
   write_summary "$WORKDIR" "$duration"
@@ -324,9 +368,20 @@ main() {
   mkdir -p "$OUTDIR_ROOT"
   prepare_templates
 
-  for t in "${TARGETS[@]}"; do
-    process_target "$t"
-  done
+  if [ "$PARALLEL" -le 1 ] || [ "$DRY_RUN" = true ]; then
+    for t in "${TARGETS[@]}"; do
+      process_target "$t"
+    done
+  else
+    for t in "${TARGETS[@]}"; do
+      process_target "$t" &
+      # Limit concurrent jobs
+      while [ "$(jobs -rp | wc -l)" -ge "$PARALLEL" ]; do
+        wait -n || true
+      done
+    done
+    wait || true
+  fi
 }
 
 main "$@"
