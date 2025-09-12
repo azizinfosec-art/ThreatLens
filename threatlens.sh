@@ -213,7 +213,12 @@ collect_urls() { # target, target_dir
   # ParamSpider (domain)
   local domain
   domain="$(echo "$target" | sed -E 's#^https?://##; s#/.*$##')"
-  run paramspider -d "$domain" -o "$rawdir/paramspider.txt" || true
+  # ParamSpider (stdout -> file); use -s if include-subs is enabled
+  if [ "$INCLUDE_SUBS" = true ]; then
+    run bash -c "paramspider -d '$domain' -s | tee '$rawdir/paramspider.txt' >/dev/null" || true
+  else
+    run bash -c "paramspider -d '$domain' | tee '$rawdir/paramspider.txt' >/dev/null" || true
+  fi
 }
 
 dedupe_urls() { # tdir

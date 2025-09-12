@@ -47,10 +47,8 @@ cmd_doctor() {
 }
 
 cmd_scan() {
-  # Prefer wrapper if exists, else call engine directly
-  local runner
-  if [ -x "$WRAP" ]; then runner="$WRAP"; else runner="$ENGINE"; fi
-  exec "$runner" "$@"
+  # Call engine directly to avoid stale/broken wrapper issues
+  exec "$ENGINE" "$@"
 }
 
 cmd_clean() {
@@ -81,4 +79,3 @@ main() {
 }
 
 main "$@"
-
