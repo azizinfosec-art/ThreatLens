@@ -36,10 +36,14 @@ log() { # level, message
   local msg="$*"
   local ts
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  {
-    echo "[$ts] [$level] $msg" >> "$WORKDIR/logs/$TOOL_BASENAME.log" 2>/dev/null || true
+  # Always print to stdout
+  echo "[$ts] [$level] $msg"
+  # If per-target logs directory exists, write there as well
+  if [ -n "${WORKDIR:-}" ] && [ -d "$WORKDIR/logs" ]; then
+    local base="${TOOL_BASENAME:-global}"
+    echo "[$ts] [$level] $msg" >> "$WORKDIR/logs/$base.log" 2>/dev/null || true
     echo "[$ts] [$level] $msg" >> "$WORKDIR/logs/threatlens.log" 2>/dev/null || true
-  } || true
+  fi
 }
 
 die() { echo "Error: $*" >&2; exit 1; }
