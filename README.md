@@ -6,7 +6,7 @@ Brief
 
 Install (local .venv only)
 - Prereqs (Kali/Debian): `sudo apt update && sudo apt install -y golang-go python3-venv python3-pip jq git`
-- Clone: `git clone <REPO_URL> && cd ThreatLens`
+- Clone: `git clone https://github.com/azizinfosec-art/ThreatLens.git && cd ThreatLens`
 - Create env: `make env` (or `bash scripts/bootstrap_env.sh`)
 - Run:
   - `./.venv/bin/threatlens -t example.com`
@@ -19,4 +19,3 @@ Outputs
 Notes
 - Use `--dry-run` to preview commands.
 - Keep scans within authorized scope.
-
