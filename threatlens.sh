@@ -441,6 +441,16 @@ process_target() { # target
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
   write_summary "$WORKDIR" "$duration"
+  # Show a concise findings preview on stdout (top 20)
+  if [ -s "$WORKDIR/results/nuclei.jsonl" ] && [ "$DRY_RUN" != true ]; then
+    echo "--- Findings (top 20) for: $target ---"
+    if command -v jq >/dev/null 2>&1; then
+      jq -r 'select(.!=null) | [(.info.severity // .severity // ""), (.info.name // ""), (.matchedAt // ."matched-at" // .host // .url // "")] | @tsv' "$WORKDIR/results/nuclei.jsonl" 2>/dev/null | head -n 20 || true
+    else
+      sed -n '1,20p' "$WORKDIR/results/nuclei.jsonl" || true
+    fi
+  fi
+
   # Print a concise final summary to stdout so results are obvious
   if [ "$DRY_RUN" != true ]; then
     echo "--- Scan Summary for: $target ---"
