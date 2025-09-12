@@ -320,7 +320,14 @@ run_nuclei() { # tdir
 
   local sev_args=()
   if [ -n "$SIGNAL_SEVERITY" ]; then sev_args=( -severity "$SIGNAL_SEVERITY" ); fi
-  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
+  # Prefer DAST mode if supported by installed nuclei
+  local dast_flag=()
+  if nuclei -h 2>&1 | grep -q -- "-dast"; then
+    dast_flag=( -dast )
+  else
+    log INFO "nuclei '-dast' not supported by this version; proceeding without it"
+  fi
+  run nuclei -l "$input_list" -t "$TEMPLATES_DIR" "${dast_flag[@]}" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${sev_args[@]}" "${NUCLEI_EXTRA_ARGS[@]}"
 }
 
 write_summary() { # tdir, duration_sec
@@ -434,7 +441,16 @@ process_target() { # target
   end_ts="$(date +%s)"
   duration=$(( end_ts - start_ts ))
   write_summary "$WORKDIR" "$duration"
-  log INFO "Completed $target"
+  # Print a concise final summary to stdout so results are obvious
+  if [ "$DRY_RUN" != true ]; then
+    echo "--- Scan Summary for: $target ---"
+    cat "$WORKDIR/results/summary.txt" 2>/dev/null || true
+    echo "Results JSONL: $WORKDIR/results/nuclei.jsonl"
+    echo "Logs:          $WORKDIR/logs"
+  else
+    echo "[dry-run] Would show summary and results paths here"
+  fi
+  log INFO "Completed $target (nuclei is the final stage)"
   rm -rf "$tmpdir" || true
   # Clear trap so EXIT doesn’t reference a now-unset local var
   trap - EXIT
