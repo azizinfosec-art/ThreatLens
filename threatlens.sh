@@ -63,7 +63,9 @@ run() { # print+run (honors dry-run)
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing dependency: $1" >&2
-    echo "Hint: Create a local env with 'make env' (uses .venv), or run 'make deps-kali' on Kali, or 'bash scripts/install.sh' on Debian/Ubuntu/macOS." >&2
+    echo "Hint: Create .venv and install requirements:" >&2
+    echo "  python3 -m venv .venv && source .venv/bin/activate" >&2
+    echo "  bash scripts/bootstrap_env.sh" >&2
     die "See README.md for setup instructions."
   fi
 }
