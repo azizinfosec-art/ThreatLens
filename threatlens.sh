@@ -31,6 +31,8 @@ FUZZ_ADD_PARAMS=false
 PARAM_WORDLIST="./wordlists/params.txt"
 SIGNAL_SEVERITY=""
 HTML_REPORT=false
+INPUTS_ONLY=false
+FUZZIFY=false
 
 # Runtime globals
 WORKDIR=""
@@ -103,8 +105,8 @@ Options:
       --httpx-codes LIST     Comma list of HTTP status codes considered alive
       --threads N            Concurrency for tools that support it (default: 50)
       --dry-run              Print commands instead of running
-      --threads N            Concurrency for collectors (default: 50)
-      --include-subs         Include subdomains where supported
+      --inputs-only          Produce results/inputs_get.txt (GET URLs) and exit
+      --fuzzify              Also produce results/fuzz_get.txt (replace values with FUZZ)
   -h, --help                 Show this help
 
 Dependencies:
@@ -144,6 +146,10 @@ parse_args() {
         NUCLEI_EXTRA_ARGS=($2); shift 2;;
       --nuclei-input)
         NUCLEI_INPUT_FILE="$2"; shift 2;;
+      --inputs-only)
+        INPUTS_ONLY=true; shift;;
+      --fuzzify)
+        FUZZIFY=true; shift;;
       --dry-run)
         DRY_RUN=true; shift;;
       --scan-raw|--no-probe)
@@ -226,6 +232,31 @@ dedupe_urls() { # tdir
   run bash -c "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tdir/urls.deduped.txt'; else : > '$tdir/urls.deduped.txt'; fi"
 }
 
+extract_inputs_get() { # tdir -> creates results/inputs_get.txt
+  local tdir="$1"; shift
+  local in="$tdir/urls.deduped.txt"
+  local out="$tdir/results/inputs_get.txt"
+  mkdir -p "$tdir/results"
+  if [ ! -s "$in" ]; then
+    log WARN "No deduped URLs at $in"
+    : > "$out"; return 0
+  fi
+  grep -Ei '\?[A-Za-z0-9_.%-]+=' "$in" | sort -u > "$out" || true
+  log INFO "inputs_get.txt: $(wc -l < "$out" | tr -d ' ') URLs with parameters"
+}
+
+prepare_fuzz_list() { # tdir -> creates results/fuzz_get.txt from inputs_get.txt
+  local tdir="$1"; shift
+  local in="$tdir/results/inputs_get.txt"
+  local out="$tdir/results/fuzz_get.txt"
+  if [ ! -s "$in" ]; then
+    log WARN "No inputs_get.txt at $in"
+    : > "$out"; return 0
+  fi
+  grep -F '?' "$in" | sed -E 's/=[^&#?]*/=FUZZ/g' | sort -u > "$out" || true
+  log INFO "fuzz_get.txt: $(wc -l < "$out" | tr -d ' ') FUZZ-ready URLs"
+}
+
 check_liveness() { :; }
 
 fuzz_prepare() { # tdir
@@ -251,7 +282,25 @@ fuzz_prepare() { # tdir
 
 run_nuclei_fuzz() { :; }
 
-run_nuclei() { :; }
+run_nuclei() {
+  local tdir="$1"; shift
+  local resdir="$tdir/results"
+  mkdir -p "$resdir"
+  local input_list
+  if [ -n "$NUCLEI_INPUT_FILE" ]; then
+    input_list="$NUCLEI_INPUT_FILE"
+  elif [ "$SCAN_SOURCE" = "raw" ]; then
+    input_list="$tdir/urls.deduped.txt"
+  else
+    input_list="$tdir/alive/alive.txt"
+  fi
+  if [ ! -s "$input_list" ]; then
+    log WARN "No input URLs for nuclei at $input_list"
+    : > "$resdir/nuclei.jsonl"
+    return 0
+  fi
+  run nuclei -l "$input_list" -jsonl -o "$resdir/nuclei.jsonl" "${NUCLEI_EXTRA_ARGS[@]}"
+}
 
 write_summary() { # tdir, duration_sec
   local tdir="$1"; shift
@@ -262,12 +311,15 @@ write_summary() { # tdir, duration_sec
   local jsonl="$resdir/nuclei.jsonl"
   local summary_txt="$resdir/summary.txt"
   local summary_json="$resdir/summary.json"
+  local inputs_file="$resdir/inputs_get.txt"
 
   # Defaults
   local total_urls=0 alive_urls=0 total_findings=0
   [ -f "$urls_file" ] && total_urls=$(wc -l < "$urls_file" | tr -d ' ')
   [ -f "$alive_file" ] && alive_urls=$(wc -l < "$alive_file" | tr -d ' ')
   [ -s "$jsonl" ] && total_findings=$(wc -l < "$jsonl" | tr -d ' ')
+  local inputs_count=0
+  [ -f "$inputs_file" ] && inputs_count=$(wc -l < "$inputs_file" | tr -d ' ')
 
   # Severity counts via jq if available
   local sev_json='{}'
@@ -282,6 +334,7 @@ write_summary() { # tdir, duration_sec
     echo "Target: $(basename "$tdir")"
     echo "Duration: ${duration}s"
     echo "URLs (deduped): $total_urls"
+    echo "Inputs (GET URLs): $inputs_count"
     echo "Alive URLs: $alive_urls"
     echo "Findings (total): $total_findings"
     if [ "$sev_json" != '{}' ]; then
