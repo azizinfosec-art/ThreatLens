@@ -153,6 +153,13 @@ templates_present() {
 
 prepare_templates() {
   mkdir -p "$TEMPLATES_DIR"
+  # In dry-run, only print intended actions and skip presence checks
+  if [ "$DRY_RUN" = true ]; then
+    log INFO "dry-run: skipping templates update/clone and presence checks"
+    run nuclei -update -update-directory "$TEMPLATES_DIR" || true
+    run nuclei -ut -ud "$TEMPLATES_DIR" || true
+    return 0
+  fi
   # Try modern nuclei flags first, then legacy as fallback
   if ! run nuclei -update -update-directory "$TEMPLATES_DIR"; then
     run nuclei -ut -ud "$TEMPLATES_DIR" || true
