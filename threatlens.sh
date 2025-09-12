@@ -141,11 +141,26 @@ parse_args() {
   [ ${#TARGETS[@]} -gt 0 ] || die "No targets specified"
 }
 
+templates_present() {
+  find "$TEMPLATES_DIR" -type f \( -name "*.yaml" -o -name "*.yml" \) -print -quit | grep -q .
+}
+
 prepare_templates() {
   mkdir -p "$TEMPLATES_DIR"
   # Try modern nuclei flags first, then legacy as fallback
   if ! run nuclei -update -update-directory "$TEMPLATES_DIR"; then
     run nuclei -ut -ud "$TEMPLATES_DIR" || true
+  fi
+  # If still empty, fallback to cloning the official templates repo
+  if ! templates_present; then
+    if command -v git >/dev/null 2>&1; then
+      log WARN "Templates directory appears empty. Cloning official nuclei-templates..."
+      run git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$TEMPLATES_DIR" || true
+    fi
+  fi
+  # Final check
+  if ! templates_present; then
+    die "No nuclei templates found in '$TEMPLATES_DIR'. Ensure network access and rerun, or manually populate templates (git clone https://github.com/projectdiscovery/nuclei-templates.git)."
   fi
 }
 
