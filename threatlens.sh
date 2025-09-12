@@ -45,7 +45,11 @@ log() { # level, message
 die() { echo "Error: $*" >&2; exit 1; }
 
 run() { # print+run (honors dry-run)
-  echo "+ $*" | tee -a "$WORKDIR/logs/$TOOL_BASENAME.log" >/dev/null
+  if [ -n "${WORKDIR:-}" ] && [ -d "$WORKDIR/logs" ]; then
+    echo "+ $*" | tee -a "$WORKDIR/logs/$TOOL_BASENAME.log" >/dev/null || true
+  else
+    echo "+ $*"
+  fi
   if [ "$DRY_RUN" = true ]; then
     return 0
   fi
@@ -53,7 +57,11 @@ run() { # print+run (honors dry-run)
 }
 
 require_tool() {
-  command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing dependency: $1" >&2
+    echo "Hint: Create a local env with 'make env' (uses .venv), or run 'make deps-kali' on Kali, or 'bash scripts/install.sh' on Debian/Ubuntu/macOS." >&2
+    die "See README.md for setup instructions."
+  fi
 }
 
 usage() {
@@ -170,14 +178,14 @@ dedupe_urls() { # tdir
   local rawdir="$tdir/raw"
   mkdir -p "$tdir"
   # uro collapses and dedupes
-  run bash -lc "cat '$rawdir/'*.txt 2>/dev/null | sort -u | uro | sort -u > '$tdir/urls.deduped.txt'"
+  run bash -lc "if compgen -G '$rawdir/*.txt' > /dev/null; then cat '$rawdir/'*.txt | uro | sort -u > '$tdir/urls.deduped.txt'; else : > '$tdir/urls.deduped.txt'; fi"
 }
 
 check_liveness() { # tdir
   local tdir="$1"; shift
   local alivedir="$tdir/alive"
   mkdir -p "$alivedir"
-  run httpx -l "$tdir/urls.deduped.txt" -silent -status-code -follow-redirects -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
+  run httpx -l "$tdir/urls.deduped.txt" -silent -follow-redirects -mc "$HTTPX_MATCH_CODES" -threads "$THREADS" -o "$alivedir/alive.txt"
 }
 
 run_nuclei() { # tdir
@@ -190,22 +198,18 @@ run_nuclei() { # tdir
     return 0
   fi
 
-  run nuclei -l "$tdir/alive/alive.txt" -jsonl -o "$resdir/nuclei.jsonl" -irr -du -stats -silent -retries 1 -bulk-size "$THREADS" -ud "$TEMPLATES_DIR" "${NUCLEI_EXTRA_ARGS[@]}"
+  run nuclei -l "$tdir/alive/alive.txt" -jsonl -o "$resdir/nuclei.jsonl" -irr -stats -silent -retries 1 -bulk-size "$THREADS" "${NUCLEI_EXTRA_ARGS[@]}"
 }
 
-write_summary() { # tdir
+write_summary() { # tdir, duration_sec
   local tdir="$1"; shift
+  local duration="$1"; shift || true
   local resdir="$tdir/results"
   local alive_file="$tdir/alive/alive.txt"
   local urls_file="$tdir/urls.deduped.txt"
   local jsonl="$resdir/nuclei.jsonl"
   local summary_txt="$resdir/summary.txt"
   local summary_json="$resdir/summary.json"
-
-  local end_ts
-  end_ts="$(date +%s)"
-  local duration
-  duration=$(( end_ts - START_TS ))
 
   # Defaults
   local total_urls=0 alive_urls=0 total_findings=0
@@ -260,14 +264,19 @@ process_target() { # target
   local tmpdir
   tmpdir="$(mktemp -d -t threatlens.XXXXXX)"
   trap 'rm -rf "$tmpdir"' EXIT
+  local start_ts end_ts duration
+  start_ts="$(date +%s)"
 
   log INFO "Starting processing for $target -> $WORKDIR"
   collect_urls "$target" "$WORKDIR" || true
   dedupe_urls "$WORKDIR"
   check_liveness "$WORKDIR"
   run_nuclei "$WORKDIR"
-  write_summary "$WORKDIR"
+  end_ts="$(date +%s)"
+  duration=$(( end_ts - start_ts ))
+  write_summary "$WORKDIR" "$duration"
   log INFO "Completed $target"
+  rm -rf "$tmpdir" || true
 }
 
 main() {
