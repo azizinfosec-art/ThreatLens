@@ -19,10 +19,9 @@ INCLUDE_SUBS=false
 DRY_RUN=false
 THREADS=50
 SOURCES="katana,wayback,gau,hakrawler"   # CSV tokens: katana,wayback,gau,hakrawler,paramspider
-NUCLEI_EXTRA_ARGS=()                      # e.g. --nuclei-args "-dast -tags xss,sqli -severity high,critical"
-NUCLEI_INPUT_FILE=""                      # if set, skip recon/probe and feed directly
-SCAN_SOURCE="alive"                       # alive | raw
-PHASE="all"                               # collect | live | scan | all
+NUCLEI_EXTRA_ARGS=()                      # legacy; kept for compatibility, not used in collect-only mode
+NUCLEI_INPUT_FILE=""                      # legacy; kept for compatibility, not used in collect-only mode
+SCAN_SOURCE="alive"                       # legacy; kept for emit auto fallback
 RESUME=false
 PARALLEL=1
 INPUTS_ONLY=false                         # --inputs-only
@@ -31,6 +30,8 @@ SIGNAL_SEVERITY=""                        # low|medium|high|critical => exit 2 i
 HTML_REPORT=false                         # --html-report
 RERANK=false                              # --rerank (micro re-rank after httpx meta)
 TOP_PER_HOST=0                            # --top-per-host N (0 = unlimited)
+EMIT_LIST=""                               # --emit auto|ranked|ranked.v2|ranked.top|inputs|alive|deduped
+QUIET=false                                # --quiet (send logs to stderr)
 
 # ---------- Runtime ----------
 WORKDIR=""
@@ -48,7 +49,11 @@ log() { # level, message...
   local level="$1"; shift
   local msg="$*"
   local ts; ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo "[$ts] [$level] $msg"
+  if [ "$QUIET" = true ]; then
+    echo "[$ts] [$level] $msg" 1>&2
+  else
+    echo "[$ts] [$level] $msg"
+  fi
   if [ -n "${WORKDIR:-}" ] && [ -d "$WORKDIR/logs" ]; then
     local base="${TOOL_BASENAME:-global}"
     echo "[$ts] [$level] $msg" >> "$WORKDIR/logs/$base.log" 2>/dev/null || true
@@ -87,8 +92,7 @@ $TOOL_NAME v$VERSION
 Usage: ./threatlens.sh [options] (-t <target> | -l targets.txt)
 
 Pipeline:
-  collect -> dedupe -> inputs-only -> prioritize -> (optional) live -> scan
-  Phases via --phase: collect | live | scan | all   (default: all)
+  collect -> dedupe -> inputs-only -> prioritize
 
 Outputs per target:
   ./output/<target>/{raw,alive,results,logs}
@@ -104,17 +108,19 @@ Options:
       --sources CSV          Recon sources (default: katana,wayback,gau,hakrawler)
                              Allowed: katana,wayback,gau,hakrawler,paramspider
       --nuclei-args "ARGS"   Extra args passed verbatim to nuclei
-      --nuclei-input FILE    Skip recon/probe; nuclei -l FILE
-      --scan-raw             Scan deduped URLs directly (skip httpx)
-      --phase PHASE          collect | live | scan | all
+      --nuclei-input FILE    (legacy) ignored in collect-only mode
+      --scan-raw             (legacy) ignored in collect-only mode
+      --emit LIST            Print list to stdout and exit (auto|ranked|ranked.v2|ranked.top|inputs|alive|deduped)
+      --output LIST          Alias for --emit
+      --quiet                Log to stderr (clean stdout for piping)
       --resume               Reuse existing artifacts if present
       --parallel N           Max targets to process concurrently (default: 1)
       --inputs-only          Produce results/inputs_get.txt and stop
       --fuzzify              Also produce results/fuzz_get.txt (values -> FUZZ)
       --rerank               Micro re-rank after httpx meta (requires jq)
       --top-per-host N       Cap first-wave per host (0=unlimited)
-      --signal LEVEL         Exit 2 if any finding >= level (low|medium|high|critical)
-      --html-report          Render simple HTML from nuclei JSONL (needs jq)
+      --signal LEVEL         (legacy) requires nuclei results; ignored if none present
+      --html-report          (legacy) requires nuclei results; ignored if none present
       --dry-run              Print commands without executing
   -h, --help                 Show this help
 
@@ -143,9 +149,11 @@ parse_args() {
                          NUCLEI_EXTRA_ARGS=($2); shift 2;;
       --nuclei-input)    NUCLEI_INPUT_FILE="${2:?}"; shift 2;;
       --dry-run)         DRY_RUN=true; shift;;
+      # --scan-raw and --phase retained for compatibility but ignored
       --scan-raw|--no-probe)
-                         SCAN_SOURCE="raw"; shift;;
-      --phase)           PHASE="${2:?}"; shift 2;;
+                         shift;;
+      --phase)
+                         shift 2;;
       --resume)          RESUME=true; shift;;
       --parallel)        PARALLEL="${2:?}"; shift 2;;
       --inputs-only)     INPUTS_ONLY=true; shift;;
@@ -154,6 +162,9 @@ parse_args() {
       --html-report)     HTML_REPORT=true; shift;;
       --rerank)          RERANK=true; shift;;
       --top-per-host)    TOP_PER_HOST="${2:?}"; shift 2;;
+      --emit)            EMIT_LIST="${2:?}"; shift 2;;
+      --output)          EMIT_LIST="${2:?}"; shift 2;;
+      --quiet)           QUIET=true; shift;;
       -h|--help)         usage; exit 0;;
       *)                 die "Unknown option: $1";;
     esac
@@ -438,6 +449,35 @@ run_nuclei() { # tdir
   run nuclei "${base_args[@]}"
 }
 
+emit_urls() { # tdir, mode -> print to stdout
+  local tdir="$1"; shift
+  local mode="$1"; shift || true
+  local chosen=""
+  case "$mode" in
+    auto)
+      if   [ -s "$tdir/results/inputs_ranked.v2.txt" ]; then chosen="$tdir/results/inputs_ranked.v2.txt"
+      elif [ -s "$tdir/results/inputs_ranked.top.txt" ]; then chosen="$tdir/results/inputs_ranked.top.txt"
+      elif [ -s "$tdir/results/inputs_ranked.txt" ];    then chosen="$tdir/results/inputs_ranked.txt"
+      elif [ -s "$tdir/results/inputs_get.txt" ];       then chosen="$tdir/results/inputs_get.txt"
+      elif [ "$SCAN_SOURCE" = "alive" ] && [ -s "$tdir/alive/alive.txt" ]; then chosen="$tdir/alive/alive.txt"
+      else chosen="$tdir/urls.deduped.txt"; fi
+      ;;
+    ranked|ranked.v1) chosen="$tdir/results/inputs_ranked.txt" ;;
+    ranked.v2|v2)     chosen="$tdir/results/inputs_ranked.v2.txt" ;;
+    ranked.top|top)   chosen="$tdir/results/inputs_ranked.top.txt" ;;
+    inputs|get)       chosen="$tdir/results/inputs_get.txt" ;;
+    alive)            chosen="$tdir/alive/alive.txt" ;;
+    deduped|raw)      chosen="$tdir/urls.deduped.txt" ;;
+    *) log WARN "Unknown --emit value: $mode"; return 1 ;;
+  esac
+  if [ -s "$chosen" ]; then
+    cat "$chosen"
+  else
+    # Print nothing if empty/nonexistent to keep pipes clean
+    :
+  fi
+}
+
 write_summary() { # tdir, duration_sec
   local tdir="$1"; shift
   local duration="${1:-0}"; shift || true
@@ -517,7 +557,7 @@ write_summary() { # tdir, duration_sec
 
 # ---------- Driver ----------
 
-process_target() { # target
+process_target() { # target (collect-only)
   local target="$1"
   local target_url="$target"
   case "$target_url" in http://*|https://*) ;; *) target_url="https://$target_url";; esac
@@ -530,37 +570,28 @@ process_target() { # target
   trap 'if [ -n "${tmpdir-}" ]; then rm -rf -- "$tmpdir"; fi' EXIT
   local start_ts end_ts duration; start_ts="$(date +%s)"
 
-  log INFO "Processing $target -> $WORKDIR (phase=$PHASE resume=$RESUME sources=$SOURCES)"
+  log INFO "Processing $target -> $WORKDIR (resume=$RESUME sources=$SOURCES)"
 
-  # If user provided nuclei input, mirror to dedup for summary consistency
-  if [ -n "$NUCLEI_INPUT_FILE" ] && [ ! -s "$WORKDIR/urls.deduped.txt" ]; then
-    cp -f "$NUCLEI_INPUT_FILE" "$WORKDIR/urls.deduped.txt" 2>/dev/null || true
+  # Collect + dedupe + inputs + rank (always; collect-only mode)
+  if [ "$RESUME" = true ] && compgen -G "$WORKDIR/raw/*.txt" > /dev/null; then
+    log INFO "Resume: raw/*.txt exists, skip collect"
+  else
+    collect_urls "$target_url" "$WORKDIR" || true
   fi
-
-  # PHASE: collect + dedupe + inputs + rank
-  if [[ "$PHASE" =~ ^(all|collect|live|scan)$ ]]; then
-    if [ -z "$NUCLEI_INPUT_FILE" ]; then
-      if [ "$RESUME" = true ] && compgen -G "$WORKDIR/raw/*.txt" > /dev/null; then
-        log INFO "Resume: raw/*.txt exists, skip collect"
-      else
-        collect_urls "$target_url" "$WORKDIR" || true
-      fi
-      if [ "$RESUME" = true ] && [ -s "$WORKDIR/urls.deduped.txt" ]; then
-        log INFO "Resume: urls.deduped.txt exists, skip dedupe"
-      else
-        dedupe_urls "$WORKDIR"
-      fi
-      extract_inputs_get "$WORKDIR"
-      rank_inputs "$WORKDIR"
-      if [ "$RERANK" = true ]; then
-        rerank_after_httpx "$WORKDIR"
-      fi
-      if [ "$TOP_PER_HOST" -gt 0 ] && [ -s "$WORKDIR/results/inputs_ranked.txt" ]; then
-        local src="$WORKDIR/results/inputs_ranked.txt"
-        [ -s "$WORKDIR/results/inputs_ranked.v2.txt" ] && src="$WORKDIR/results/inputs_ranked.v2.txt"
-        cap_top_per_host "$src" "$WORKDIR/results/inputs_ranked.top.txt" "$TOP_PER_HOST"
-      fi
-    fi
+  if [ "$RESUME" = true ] && [ -s "$WORKDIR/urls.deduped.txt" ]; then
+    log INFO "Resume: urls.deduped.txt exists, skip dedupe"
+  else
+    dedupe_urls "$WORKDIR"
+  fi
+  extract_inputs_get "$WORKDIR"
+  rank_inputs "$WORKDIR"
+  if [ "$RERANK" = true ]; then
+    rerank_after_httpx "$WORKDIR"
+  fi
+  if [ "$TOP_PER_HOST" -gt 0 ] && [ -s "$WORKDIR/results/inputs_ranked.txt" ]; then
+    local src="$WORKDIR/results/inputs_ranked.txt"
+    [ -s "$WORKDIR/results/inputs_ranked.v2.txt" ] && src="$WORKDIR/results/inputs_ranked.v2.txt"
+    cap_top_per_host "$src" "$WORKDIR/results/inputs_ranked.top.txt" "$TOP_PER_HOST"
   fi
 
   # Stop after inputs-only
@@ -572,23 +603,16 @@ process_target() { # target
     rm -rf "$tmpdir" || true; trap - EXIT; return 0
   fi
 
-  # PHASE: live probe (only if using alive)
-  if [[ "$PHASE" =~ ^(all|live|scan)$ ]]; then
-    if [ "$SCAN_SOURCE" = "alive" ] && [ -z "$NUCLEI_INPUT_FILE" ]; then
-      if [ "$RESUME" = true ] && [ -s "$WORKDIR/alive/alive.txt" ]; then
-        log INFO "Resume: alive.txt exists, skip probe"
-      else
-        check_liveness "$WORKDIR"
-      fi
-    fi
-  fi
-
   # Optional fuzz list
   [ "$FUZZIFY" = true ] && prepare_fuzz_list "$WORKDIR"
 
-  # PHASE: scan
-  if [[ "$PHASE" =~ ^(all|scan)$ ]]; then
-    run_nuclei "$WORKDIR"
+  # Emit mode: print chosen list to stdout and exit early (ideal for piping to nuclei)
+  if [ -n "$EMIT_LIST" ]; then
+    emit_urls "$WORKDIR" "$EMIT_LIST" || true
+    # When emitting, we stop here to keep stdout clean for pipes
+    end_ts="$(date +%s)"; duration=$(( end_ts - start_ts ))
+    write_summary "$WORKDIR" "$duration"
+    rm -rf "$tmpdir" || true; trap - EXIT; return 0
   fi
 
   end_ts="$(date +%s)"; duration=$(( end_ts - start_ts ))
@@ -623,26 +647,17 @@ process_target() { # target
 main() {
   parse_args "$@"
 
-  # Dependencies
-  if [ -n "$NUCLEI_INPUT_FILE" ]; then
-    require_tool nuclei
-    command -v jq >/dev/null 2>&1 || log WARN "jq missing: severity breakdown/HTML limited"
-  else
-    # Required for recon/scan
-    # katana+uro+httpx+nuclei are the core; archives/crawlers are optional
-    require_tool uro
-    require_tool nuclei
-    require_tool httpx
-    if _has_source "katana"; then require_tool katana; fi
-    if _has_source "wayback" && ! command -v waybackurls >/dev/null 2>&1; then log WARN "Optional tool missing: waybackurls"; fi
-    if _has_source "gau"     && ! command -v gauplus    >/dev/null 2>&1; then log WARN "Optional tool missing: gauplus"; fi
-    if _has_source "hakrawler" && ! command -v hakrawler >/dev/null 2>&1; then log WARN "Optional tool missing: hakrawler"; fi
-    if _has_source "paramspider" && ! command -v paramspider >/dev/null 2>&1; then log WARN "Optional tool missing: paramspider"; fi
-    command -v jq >/dev/null 2>&1 || log WARN "jq missing: some features (HTML, --signal, --rerank) limited"
-  fi
+  # Dependencies (collect-only)
+  require_tool uro
+  if _has_source "katana"; then require_tool katana; fi
+  if _has_source "wayback" && ! command -v waybackurls >/dev/null 2>&1; then log WARN "Optional tool missing: waybackurls"; fi
+  if _has_source "gau"     && ! command -v gauplus    >/dev/null 2>&1; then log WARN "Optional tool missing: gauplus"; fi
+  if _has_source "hakrawler" && ! command -v hakrawler >/dev/null 2>&1; then log WARN "Optional tool missing: hakrawler"; fi
+  if _has_source "paramspider" && ! command -v paramspider >/dev/null 2>&1; then log WARN "Optional tool missing: paramspider"; fi
+  command -v jq >/dev/null 2>&1 || log WARN "jq missing: some features (--rerank) limited"
 
   mkdir -p "$OUTDIR_ROOT"
-  prepare_templates
+  # No templates management needed in collect-only mode
 
   if [ "$PARALLEL" -le 1 ] || [ "$DRY_RUN" = true ]; then
     for t in "${TARGETS[@]}"; do process_target "$t"; done

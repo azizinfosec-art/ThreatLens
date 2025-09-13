@@ -2,8 +2,8 @@ ThreatLens
 ===========
 
 Overview
-- Lightweight recon → normalize → inputs-only → prioritize → (optional) probe → DAST orchestrator.
-- Collects URLs from multiple sources, deduplicates/normalizes, extracts GET inputs, prioritizes, and optionally scans with nuclei.
+- Lightweight recon → normalize → inputs-only → prioritize. Collection-only by default.
+- Collects URLs from multiple sources, deduplicates/normalizes, extracts GET inputs, prioritizes. Pipe results to nuclei if desired.
 - Version: v0.2.2
 
 Key Features
@@ -33,31 +33,32 @@ Option B — User‑local venv (recommended for dev)
   - Optional helper: `./tl deps` (wraps the same bootstrap)
 - Preflight: `./tl doctor`
 
-Quick Start
+Quick Start (collection)
 - Inputs only (GET URLs):
   - `./threatlens.sh -t example.com --inputs-only`
 - Inputs + FUZZ list:
   - `./threatlens.sh -t example.com --inputs-only --fuzzify`
-- Full pipeline with recommended nuclei args:
-  - `./threatlens.sh -t example.com --threads 80 \
-      --nuclei-args "-dast -tags xss,sqli,lfi,redirect,ssrf -severity medium,high,critical -rl 50 -c 50"`
 - Prioritize with re-rank and cap per host:
   - `./threatlens.sh -t example.com --rerank --top-per-host 200`
-- Use custom input list for nuclei:
-  - `./threatlens.sh -t example.com --phase scan \
-      --nuclei-input urls_with_params.txt --nuclei-args "-dast -tags sqli,xss"`
 - Parallelize across targets list:
   - `./threatlens.sh -l examples/targets.txt --parallel 5 --threads 80`
 
+Pipe Mode (feed to nuclei)
+- Emit a chosen list and pipe to nuclei. Use `--quiet` to keep stdout clean and send logs to stderr.
+  - Ranked v1: `./threatlens.sh -t example.com --output ranked --quiet | nuclei -dast -rl 50 -c 50`
+  - Best available (auto: v2 → top → v1 → inputs → alive → deduped):
+    `./threatlens.sh -t example.com --rerank --top-per-host 200 --output auto --quiet | nuclei -dast -rl 50 -c 50`
+  - Inputs-only: `./threatlens.sh -t example.com --inputs-only --output inputs --quiet | nuclei -dast -rl 50 -c 50`
+
 Important Flags
 - `--sources CSV`: pick sources, default `katana,wayback,gau,hakrawler` (allow: `katana,wayback,gau,hakrawler,paramspider`).
-- `--phase`: `collect | live | scan | all` (default `all`).
-- `--scan-raw`: feed deduped URLs to nuclei directly (skip httpx/alive set).
 - `--rerank`: add a lightweight rank boost from httpx metadata (needs `jq`).
 - `--top-per-host N`: cap first-wave candidates per host.
-- `--nuclei-args "..."`: passed verbatim to nuclei.
-- `--html-report`: render a simple HTML table from nuclei JSONL (needs `jq`).
 - `--resume`: reuse existing artifacts when present.
+- `--threads N`: concurrency for collectors and ranking hints.
+- `--inputs-only`: produce `inputs_get.txt` and stop early.
+- `--emit LIST` / `--output LIST`: print a list to stdout and exit (`auto|ranked|ranked.v2|ranked.top|inputs|alive|deduped`).
+- `--quiet`: send logs to stderr for clean pipelines.
 - `--dry-run`: print commands, do not execute.
 
 Outputs
