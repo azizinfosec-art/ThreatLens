@@ -30,7 +30,7 @@ SIGNAL_SEVERITY=""                        # low|medium|high|critical => exit 2 i
 HTML_REPORT=false                         # --html-report
 RERANK=false                              # --rerank (micro re-rank after httpx meta)
 TOP_PER_HOST=0                            # --top-per-host N (0 = unlimited)
-EMIT_LIST=""                               # --emit auto|ranked|ranked.v2|ranked.top|inputs|alive|deduped
+EMIT_LIST=""                               # --emit/--output list selector (auto|ranked|ranked.v2|ranked.top|inputs|alive|deduped)
 QUIET=false                                # --quiet (send logs to stderr)
 
 # ---------- Runtime ----------
